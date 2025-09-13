@@ -120,17 +120,24 @@ def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("birthdays", birthdays_command))
 
-    # щоденне нагадування о 09:00
-    app.job_queue.run_daily(check_and_notify, time=NOTIFY_TIME, name="daily-birthdays")
+    # ✅ JobQueue (щоденні нагадування)
+    job_queue = app.job_queue
+    if job_queue is None:
+        raise RuntimeError(
+            'JobQueue недоступний. Додай у requirements.txt: python-telegram-bot[webhooks,job-queue]'
+        )
+    job_queue.run_daily(check_and_notify, time=NOTIFY_TIME, name="daily-birthdays")
 
-    # --- Webhook ---
-    url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}"
+    # ✅ Webhook URL з fallback
+    base_url = os.getenv("RENDER_EXTERNAL_URL") or (
+        f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}" if os.getenv('RENDER_EXTERNAL_HOSTNAME') else None
+    )
+    if not base_url:
+        raise RuntimeError("Не знайдено RENDER_EXTERNAL_URL або RENDER_EXTERNAL_HOSTNAME у змінних середовища")
+
     app.run_webhook(
         listen="0.0.0.0",
-        port=PORT,
+        port=int(os.getenv("PORT", 8080)),
         url_path=TELEGRAM_TOKEN,
-        webhook_url=f"{url}/{TELEGRAM_TOKEN}"
+        webhook_url=f"{base_url}/{TELEGRAM_TOKEN}",
     )
-
-if __name__ == "__main__":
-    main()

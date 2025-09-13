@@ -1,4 +1,5 @@
-python-telegram-bot[webhooks]
+python-telegram-bot[webhooks,job-queue]
+google-auth
 google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
