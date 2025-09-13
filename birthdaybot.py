@@ -11,7 +11,8 @@ from zoneinfo import ZoneInfo
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-RANGE_NAME = "Лист1!A:C"  # A - Ім'я, B - Дата, C - Лінк
+PORT = int(os.getenv("PORT", 8443))  # Render дає PORT автоматично
+RANGE_NAME = "Лист1!A:C"
 TZ = ZoneInfo("Europe/Kyiv")
 NOTIFY_TIME = dtime(hour=9, minute=0, tzinfo=TZ)
 
@@ -42,7 +43,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
     today = datetime.date.today()
     birthdays = get_birthdays()
 
-    for row in birthdays[1:]:  # пропускаємо заголовки
+    for row in birthdays[1:]:
         if len(row) < 3:
             continue
         name, date_str, wishlist = row[0], row[1], row[2]
@@ -122,7 +123,14 @@ def main():
     # щоденне нагадування о 09:00
     app.job_queue.run_daily(check_and_notify, time=NOTIFY_TIME, name="daily-birthdays")
 
-    app.run_polling(close_loop=False)
+    # --- Webhook ---
+    url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}"
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TELEGRAM_TOKEN,
+        webhook_url=f"{url}/{TELEGRAM_TOKEN}"
+    )
 
 if __name__ == "__main__":
     main()
