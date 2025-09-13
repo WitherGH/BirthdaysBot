@@ -15,6 +15,8 @@ RANGE_NAME = "Лист1!A:C"  # A - Ім'я, B - Дата, C - Лінк
 TZ = ZoneInfo("Europe/Kyiv")
 NOTIFY_TIME = dtime(hour=9, minute=0, tzinfo=TZ)
 
+print("GOOGLE_CREDENTIALS:", os.getenv("GOOGLE_CREDENTIALS") is not None)
+
 # Авторизація Google Sheets
 google_creds = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
 creds = service_account.Credentials.from_service_account_info(
