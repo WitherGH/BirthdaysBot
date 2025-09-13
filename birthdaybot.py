@@ -1,5 +1,5 @@
 import datetime
-import os
+import os, json
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
 from telegram import Update
@@ -16,8 +16,10 @@ TZ = ZoneInfo("Europe/Kyiv")
 NOTIFY_TIME = dtime(hour=9, minute=0, tzinfo=TZ)
 
 # Авторизація Google Sheets
-creds = service_account.Credentials.from_service_account_file(
-    "credentials.json", scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
+google_creds = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
+creds = service_account.Credentials.from_service_account_info(
+    google_creds,
+    scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
 )
 service = build("sheets", "v4", credentials=creds)
 
