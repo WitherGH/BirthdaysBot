@@ -9,6 +9,10 @@ from googleapiclient.discovery import build
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
+
+import telegram
+print("PTB version:", getattr(telegram, "__version__", "unknown"))
+
 # === ENV ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
