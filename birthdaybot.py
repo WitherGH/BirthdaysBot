@@ -1,5 +1,6 @@
 import os, json
 import datetime
+import random
 from datetime import time as dtime
 from zoneinfo import ZoneInfo
 
@@ -33,6 +34,35 @@ creds = service_account.Credentials.from_service_account_info(
 )
 service = build("sheets", "v4", credentials=creds)
 
+MONTHS_UK = [
+    "січня","лютого","березня","квітня","травня","червня",
+    "липня","серпня","вересня","жовтня","листопада","грудня"
+]
+
+def format_date_uk(d: datetime.date) -> str:
+    return f"{d.day} {MONTHS_UK[d.month - 1]}"
+
+def next_birthday_date(bday: datetime.date, today: datetime.date) -> datetime.date:
+    this_year = bday.replace(year=today.year)
+    return this_year if this_year >= today else this_year.replace(year=today.year + 1)
+
+# Варіанти шаблонів
+TEMPLATES_7D = [
+    "📢 Через тиждень — {date} — святкує {name}. Виповниться {age}. Віш-ліст: {wishlist}\n(тільки ніхто нічого не бачив, тсссс 🤫)",
+    "🔔 За 7 днів {name}: {date}. {age} років. Список бажань: {wishlist}\n🤫",
+    "🗓️ {date} — у {name} ДН! Плануємо привітання! {age} років. Віш-ліст: {wishlist}"
+]
+TEMPLATES_3D = [
+    "⏳ Залишилось 3 дні: {date} — {name}. {age}. Ідеї подарунків: {wishlist}",
+    "🚀 3 дні до ДН {name} ({date}). {age} років. {wishlist}",
+    "🧁 Уже скоро — {date}. {name}, {age} років. Ось віш-ліст: {wishlist}"
+]
+TEMPLATES_0D = [
+    "🎂 Сьогодні — {date}. Вітаємо {name}! Виповнюється {age}! 🎉 Віш-ліст: {wishlist}",
+    "🥳 Сьогодні святкує {name} ({date}) — {age}. Теплі слова та гіфки вітаються! {wishlist}",
+    "🎉 День Х! {name}, {age} — вітаємо! {wishlist}"
+]
+
 def get_birthdays():
     res = service.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID, range=RANGE_NAME
@@ -45,7 +75,7 @@ def calculate_age(bday: datetime.date, ref_date: datetime.date) -> int:
         age -= 1
     return age
 
-# --- Щоденна перевірка та розсилки ---
+# --- Щоденна перевірка ---
 async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
     today = datetime.date.today()
     rows = get_birthdays()
@@ -61,48 +91,26 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             continue
 
-        this_year = bday.replace(year=today.year)
-        if this_year < today:
-            this_year = this_year.replace(year=today.year + 1)
-
-        delta = (this_year - today).days
-        age = calculate_age(bday, this_year)
+        d_next = next_birthday_date(bday, today)
+        delta = (d_next - today).days
+        age = calculate_age(bday, d_next)
+        date_txt = format_date_uk(d_next)
 
         if delta == 7:
-            await context.bot.send_message(
-                chat_id=CHAT_ID,
-                text=(
-                    f"📢 Через тиждень ({this_year}) у {name} день народження! 🎉\n"
-                    f"Виповниться {age} років.\n"
-                    f"Віш-ліст: {wishlist}\n"
-                    f"Тільки ніхто нічого не бачив, тсссс 🤫"
-                )
-            )
+            msg = random.choice(TEMPLATES_7D).format(name=name, date=date_txt, age=age, wishlist=wishlist)
+            await context.bot.send_message(chat_id=CHAT_ID, text=msg)
         elif delta == 3:
-            await context.bot.send_message(
-                chat_id=CHAT_ID,
-                text=(
-                    f"⏳ Уже скоро ({this_year}), через 3 дні святкує {name}! 🥳\n"
-                    f"Виповниться {age} років.\n"
-                    f"Віш-ліст: {wishlist}\n"
-                    f"👀"
-                )
-            )
+            msg = random.choice(TEMPLATES_3D).format(name=name, date=date_txt, age=age, wishlist=wishlist)
+            await context.bot.send_message(chat_id=CHAT_ID, text=msg)
         elif delta == 0:
-            await context.bot.send_message(
-                chat_id=CHAT_ID,
-                text=(
-                    f"🎂 Сьогодні ({this_year}) у {name} день народження! 🎉🥳\n"
-                    f"Виповнюється {age} років! 🎊\n"
-                    f"Всі вітаємо! 🥂\nВіш-ліст: {wishlist}"
-                )
-            )
+            msg = random.choice(TEMPLATES_0D).format(name=name, date=date_txt, age=age, wishlist=wishlist)
+            await context.bot.send_message(chat_id=CHAT_ID, text=msg)
 
-# --- /birthdays ---
+# --- Команда /birthdays (топ-3) ---
 async def birthdays_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today = datetime.date.today()
     rows = get_birthdays()
-    upcoming = []
+    people = []
 
     if rows and len(rows) > 1:
         for row in rows[1:]:
@@ -114,20 +122,25 @@ async def birthdays_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except ValueError:
                 continue
 
-            this_year = bday.replace(year=today.year)
-            if this_year < today:
-                this_year = this_year.replace(year=today.year + 1)
-            delta = (this_year - today).days
-            age = calculate_age(bday, this_year)
+            d_next = next_birthday_date(bday, today)
+            delta = (d_next - today).days
+            age = calculate_age(bday, d_next)
+            people.append((delta, name, d_next, age, wishlist))
 
-            if delta <= 30:
-                upcoming.append(f"🎉 {this_year} – {name}, {age} років\n🔗 {wishlist}")
+    if not people:
+        await update.message.reply_text("Найближчих днів народження поки не видно ✅")
+        return
 
-    msg = (
-        "📅 Найближчі дні народження:\n\n" + "\n\n".join(upcoming)
-        if upcoming else "Найближчих днів народження впродовж місяця немає ✅"
-    )
+    people.sort(key=lambda x: x[0])
+    top = people[:3]
+
+    lines = []
+    for i, (_, name, d_next, age, wishlist) in enumerate(top, start=1):
+        lines.append(f"{i}) {format_date_uk(d_next)} — {name}, виповнюється {age}. 🔗 {wishlist}")
+
+    msg = "🎉 Найближчі дні народження (топ-3):\n\n" + "\n".join(lines) + "\n\nТільки не забудь 😉"
     await update.message.reply_text(msg)
+
 
 # --- main / webhook ---
 def main():
