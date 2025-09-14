@@ -11,21 +11,22 @@ from googleapiclient.discovery import build
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-import telegram
-print("PTB version:", getattr(telegram, "__version__", "unknown"))
+from fastapi import FastAPI, Request
+from starlette.responses import PlainTextResponse
+import uvicorn
 
 # === ENV ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")                    # -100.... (ID групи)
-SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")     # ID гугл-таблиці
-RANGE_NAME = "Лист1!A:C"                         # A: Ім'я, B: Дата YYYY-MM-DD, C: Віш-ліст
-
-# Київський час + час дзвінка
+CHAT_ID = os.getenv("CHAT_ID")
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
+RANGE_NAME = "Лист1!A:C"
 TZ = ZoneInfo("Europe/Kyiv")
 NOTIFY_TIME = dtime(hour=9, minute=0, tzinfo=TZ)
 
-# --- Google Sheets auth ---
+print("PTB version:", __import__("telegram").__version__)
 print("GOOGLE_CREDENTIALS:", os.getenv("GOOGLE_CREDENTIALS") is not None)
+
+# --- Google Sheets auth ---
 google_creds = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
 creds = service_account.Credentials.from_service_account_info(
     google_creds,
@@ -33,10 +34,8 @@ creds = service_account.Credentials.from_service_account_info(
 )
 service = build("sheets", "v4", credentials=creds)
 
-MONTHS_UK = [
-    "січня","лютого","березня","квітня","травня","червня",
-    "липня","серпня","вересня","жовтня","листопада","грудня"
-]
+MONTHS_UK = ["січня","лютого","березня","квітня","травня","червня",
+             "липня","серпня","вересня","жовтня","листопада","грудня"]
 
 def format_date_uk(d: datetime.date) -> str:
     return f"{d.day} {MONTHS_UK[d.month - 1]}"
@@ -80,13 +79,14 @@ def parse_row(row):
     wishlist = row[2].strip() if len(row) > 2 and row[2].strip() else "❌ не додано"
     return name, date_str, wishlist
 
-# --- Щоденна перевірка ---
+# --- PTB app ---
+tg_app = Application.builder().token(TELEGRAM_TOKEN).build()
+
 async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
     today = datetime.date.today()
     rows = get_birthdays()
     if not rows or len(rows) < 2:
         return
-
     for row in rows[1:]:
         name, date_str, wishlist = parse_row(row)
         if not name or not date_str:
@@ -95,12 +95,10 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             bday = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
         except ValueError:
             continue
-
         d_next = next_birthday_date(bday, today)
         delta = (d_next - today).days
         age = calculate_age(bday, d_next)
         date_txt = format_date_uk(d_next)
-
         if delta == 7:
             msg = random.choice(TEMPLATES_7D).format(name=name, date=date_txt, age=age, wishlist=wishlist)
             await context.bot.send_message(chat_id=CHAT_ID, text=msg)
@@ -111,12 +109,10 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             msg = random.choice(TEMPLATES_0D).format(name=name, date=date_txt, age=age, wishlist=wishlist)
             await context.bot.send_message(chat_id=CHAT_ID, text=msg)
 
-# --- Команда /birthdays (топ-3) ---
 async def birthdays_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today = datetime.date.today()
     rows = get_birthdays()
     people = []
-
     if rows and len(rows) > 1:
         for row in rows[1:]:
             name, date_str, wishlist = parse_row(row)
@@ -126,52 +122,60 @@ async def birthdays_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 bday = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
             except ValueError:
                 continue
-
             d_next = next_birthday_date(bday, today)
             delta = (d_next - today).days
             age = calculate_age(bday, d_next)
             people.append((delta, name, d_next, age, wishlist))
-
     if not people:
         await update.message.reply_text("Найближчих днів народження поки не видно ✅")
         return
-
     people.sort(key=lambda x: x[0])
     top = people[:3]
+    lines = [f"{i}) {format_date_uk(d)} — {n}, виповнюється {a}. Віш-ліст: {w}"
+             for i, (_, n, d, a, w) in enumerate(top, start=1)]
+    await update.message.reply_text("🎉 Найближчі дні народження (топ-3):\n\n" + "\n".join(lines) + "\n\nТільки не забудь 😉")
 
-    lines = []
-    for i, (_, name, d_next, age, wishlist) in enumerate(top, start=1):
-        lines.append(f"{i}) {format_date_uk(d_next)} — {name}, виповнюється {age}. Віш-ліст: {wishlist}")
+tg_app.add_handler(CommandHandler("birthdays", birthdays_command))
+tg_app.job_queue.run_daily(check_and_notify, time=NOTIFY_TIME, name="daily-birthdays")
 
-    msg = "🎉 Найближчі дні народження (топ-3):\n\n" + "\n".join(lines) + "\n\nТільки не забудь 😉"
-    await update.message.reply_text(msg)
+# --- FastAPI for webhooks/health/cron ---
+api = FastAPI()
 
-# --- main ---
-def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("birthdays", birthdays_command))
-
-    # JobQueue (необхідно мати extras: [webhooks,job-queue] у requirements.txt)
-    if app.job_queue is None:
-        raise SystemExit("JobQueue недоступний. Додай у requirements: python-telegram-bot[webhooks,job-queue]==21.6")
-    app.job_queue.run_daily(check_and_notify, time=NOTIFY_TIME, name="daily-birthdays")
-
-    # Зовнішній URL для вебхука
+@api.on_event("startup")
+async def on_startup():
+    await tg_app.initialize()
+    await tg_app.start()
     base_url = (
         os.getenv("PUBLIC_URL")
         or os.getenv("RENDER_EXTERNAL_URL")
         or (f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}" if os.getenv("RENDER_EXTERNAL_HOSTNAME") else None)
     )
     if not base_url:
-        raise SystemExit("ERROR: Не знайдено URL для webhook. Додай PUBLIC_URL (https://<your-service>.onrender.com).")
+        raise RuntimeError("Set PUBLIC_URL (e.g. https://<service>.onrender.com)")
+    await tg_app.bot.set_webhook(f"{base_url}/telegram")
 
-    # Запуск вбудованого Tornado-вебсервера PTB + реєстрація вебхука
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.getenv("PORT", 8080)),
-        url_path=TELEGRAM_TOKEN,
-        webhook_url=f"{base_url}/{TELEGRAM_TOKEN}",
-    )
+@api.on_event("shutdown")
+async def on_shutdown():
+    await tg_app.stop()
+    await tg_app.shutdown()
+
+@api.get("/healthz")
+async def healthz():
+    return PlainTextResponse("ok", status_code=200)
+
+@api.get("/run-daily")
+async def run_daily():
+    class Ctx:
+        bot = tg_app.bot
+    await check_and_notify(Ctx())
+    return PlainTextResponse("daily ok", status_code=200)
+
+@api.post("/telegram")
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, tg_app.bot)
+    await tg_app.process_update(update)
+    return {"ok": True}
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run(api, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))

@@ -1,7 +1,13 @@
-python-telegram-bot[webhooks,job-queue]==21.6
+python-telegram-bot[job-queue]==21.6
+fastapi==0.115.0
+uvicorn==0.30.6
+
 google-api-python-client==2.152.0
 google-auth==2.34.0
+
+# ці можна лишити або прибрати — не обов'язкові для твого коду:
 google-auth-httplib2==0.2.0
 google-auth-oauthlib==1.2.1
+
 attrs>=23.2.0
 tzdata
