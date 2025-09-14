@@ -10,6 +10,9 @@ from googleapiclient.discovery import build
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
+from fastapi import FastAPI
+from starlette.responses import PlainTextResponse
+
 import telegram
 print("PTB version:", getattr(telegram, "__version__", "unknown"))
 
@@ -145,6 +148,17 @@ async def birthdays_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = "🎉 Найближчі дні народження (топ-3):\n\n" + "\n".join(lines) + "\n\nТільки не забудь 😉"
     await update.message.reply_text(msg)
 
+
+app_api = FastAPI()
+
+@app_api.get("/daily")
+async def trigger_daily():
+    class FakeContext:
+        bot = Application.builder().token(TELEGRAM_TOKEN).build().bot
+    await check_and_notify(FakeContext())
+    return PlainTextResponse("Daily job executed ✅", status_code=200)
+
+
 # --- main ---
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -169,6 +183,7 @@ def main():
         port=int(os.getenv("PORT", 8080)),
         url_path=TELEGRAM_TOKEN,
         webhook_url=f"{base_url}/{TELEGRAM_TOKEN}",
+        web_app=app_api,
     )
 
 if __name__ == "__main__":
