@@ -1,4 +1,6 @@
 python-telegram-bot[webhooks,job-queue]==21.6
+fastapi==0.115.0
+uvicorn==0.30.6
 google-api-python-client==2.152.0
 google-auth==2.34.0
 google-auth-httplib2==0.2.0
