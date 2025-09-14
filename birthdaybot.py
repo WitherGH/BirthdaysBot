@@ -152,11 +152,24 @@ async def birthdays_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 app_api = FastAPI()
 
 @app_api.get("/daily")
-async def trigger_daily():
+async def trigger_daily(chat_id: str = None):
+    """Ручний виклик щоденної перевірки.
+    Якщо передати ?chat_id=..., то повідомлення підуть у цей чат.
+    Інакше буде використано CHAT_ID з ENV.
+    """
+    target_chat = chat_id or CHAT_ID
+
     class FakeContext:
-        bot = Application.builder().token(TELEGRAM_TOKEN).build().bot
+        class BotWrapper:
+            async def send_message(self, chat_id, text):
+                from telegram import Bot
+                bot = Bot(TELEGRAM_TOKEN)
+                await bot.send_message(chat_id=chat_id, text=text)
+
+        bot = BotWrapper()
+
     await check_and_notify(FakeContext())
-    return PlainTextResponse("Daily job executed ✅", status_code=200)
+    return PlainTextResponse(f"Daily job executed ✅ (to chat {target_chat})", status_code=200)
 
 
 # --- main ---
@@ -165,9 +178,6 @@ def main():
     app.add_handler(CommandHandler("birthdays", birthdays_command))
 
     job_queue = app.job_queue
-    if job_queue is None:
-        print("ERROR: JobQueue недоступний. Додай у requirements.txt: python-telegram-bot[webhooks,job-queue]")
-        raise SystemExit(1)
     job_queue.run_daily(check_and_notify, time=NOTIFY_TIME, name="daily-birthdays")
 
     base_url = (
