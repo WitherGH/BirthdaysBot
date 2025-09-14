@@ -1,3 +1,4 @@
+# birthdaybot.py
 import os, json
 import datetime
 import random
@@ -10,24 +11,21 @@ from googleapiclient.discovery import build
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from fastapi import FastAPI
-from starlette.responses import PlainTextResponse
-
 import telegram
 print("PTB version:", getattr(telegram, "__version__", "unknown"))
 
 # === ENV ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-RANGE_NAME = "Лист1!A:C"
+CHAT_ID = os.getenv("CHAT_ID")                    # -100.... (ID групи)
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")     # ID гугл-таблиці
+RANGE_NAME = "Лист1!A:C"                         # A: Ім'я, B: Дата YYYY-MM-DD, C: Віш-ліст
 
+# Київський час + час дзвінка
 TZ = ZoneInfo("Europe/Kyiv")
 NOTIFY_TIME = dtime(hour=9, minute=0, tzinfo=TZ)
 
-print("GOOGLE_CREDENTIALS:", os.getenv("GOOGLE_CREDENTIALS") is not None)
-
 # --- Google Sheets auth ---
+print("GOOGLE_CREDENTIALS:", os.getenv("GOOGLE_CREDENTIALS") is not None)
 google_creds = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
 creds = service_account.Credentials.from_service_account_info(
     google_creds,
@@ -79,7 +77,7 @@ def calculate_age(bday: datetime.date, ref_date: datetime.date) -> int:
 def parse_row(row):
     name = row[0].strip() if len(row) > 0 else ""
     date_str = row[1].strip() if len(row) > 1 else ""
-    wishlist = row[2].strip() if len(row) > 2 else "❌ не додано"
+    wishlist = row[2].strip() if len(row) > 2 and row[2].strip() else "❌ не додано"
     return name, date_str, wishlist
 
 # --- Щоденна перевірка ---
@@ -113,7 +111,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             msg = random.choice(TEMPLATES_0D).format(name=name, date=date_txt, age=age, wishlist=wishlist)
             await context.bot.send_message(chat_id=CHAT_ID, text=msg)
 
-# --- Команда /birthdays ---
+# --- Команда /birthdays (топ-3) ---
 async def birthdays_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today = datetime.date.today()
     rows = get_birthdays()
@@ -148,52 +146,31 @@ async def birthdays_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = "🎉 Найближчі дні народження (топ-3):\n\n" + "\n".join(lines) + "\n\nТільки не забудь 😉"
     await update.message.reply_text(msg)
 
-
-app_api = FastAPI()
-
-@app_api.get("/daily")
-async def trigger_daily(chat_id: str = None):
-    """Ручний виклик щоденної перевірки.
-    Якщо передати ?chat_id=..., то повідомлення підуть у цей чат.
-    Інакше буде використано CHAT_ID з ENV.
-    """
-    target_chat = chat_id or CHAT_ID
-
-    class FakeContext:
-        class BotWrapper:
-            async def send_message(self, chat_id, text):
-                from telegram import Bot
-                bot = Bot(TELEGRAM_TOKEN)
-                await bot.send_message(chat_id=chat_id, text=text)
-
-        bot = BotWrapper()
-
-    await check_and_notify(FakeContext())
-    return PlainTextResponse(f"Daily job executed ✅ (to chat {target_chat})", status_code=200)
-
-
 # --- main ---
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("birthdays", birthdays_command))
 
-    job_queue = app.job_queue
-    job_queue.run_daily(check_and_notify, time=NOTIFY_TIME, name="daily-birthdays")
+    # JobQueue (необхідно мати extras: [webhooks,job-queue] у requirements.txt)
+    if app.job_queue is None:
+        raise SystemExit("JobQueue недоступний. Додай у requirements: python-telegram-bot[webhooks,job-queue]==21.6")
+    app.job_queue.run_daily(check_and_notify, time=NOTIFY_TIME, name="daily-birthdays")
 
+    # Зовнішній URL для вебхука
     base_url = (
         os.getenv("PUBLIC_URL")
         or os.getenv("RENDER_EXTERNAL_URL")
         or (f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}" if os.getenv("RENDER_EXTERNAL_HOSTNAME") else None)
     )
     if not base_url:
-        raise SystemExit("ERROR: Не знайдено URL для webhook.")
+        raise SystemExit("ERROR: Не знайдено URL для webhook. Додай PUBLIC_URL (https://<your-service>.onrender.com).")
 
+    # Запуск вбудованого Tornado-вебсервера PTB + реєстрація вебхука
     app.run_webhook(
         listen="0.0.0.0",
         port=int(os.getenv("PORT", 8080)),
         url_path=TELEGRAM_TOKEN,
         webhook_url=f"{base_url}/{TELEGRAM_TOKEN}",
-        web_app=app_api,
     )
 
 if __name__ == "__main__":
