@@ -10,7 +10,6 @@ from googleapiclient.discovery import build
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-
 import telegram
 print("PTB version:", getattr(telegram, "__version__", "unknown"))
 
@@ -18,9 +17,8 @@ print("PTB version:", getattr(telegram, "__version__", "unknown"))
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-RANGE_NAME = "Лист1!A:C"  # A - Ім'я, B - Дата (YYYY-MM-DD), C - Лінк
+RANGE_NAME = "Лист1!A:C"
 
-# Київський час
 TZ = ZoneInfo("Europe/Kyiv")
 NOTIFY_TIME = dtime(hour=9, minute=0, tzinfo=TZ)
 
@@ -46,10 +44,10 @@ def next_birthday_date(bday: datetime.date, today: datetime.date) -> datetime.da
     this_year = bday.replace(year=today.year)
     return this_year if this_year >= today else this_year.replace(year=today.year + 1)
 
-# Варіанти шаблонів
+# Шаблони
 TEMPLATES_7D = [
-    "📢 Через тиждень — {date} — святкує {name}. Виповниться {age}. Віш-ліст: {wishlist}\n(тільки ніхто нічого не бачив, тсссс 🤫)",
-    "🔔 За 7 днів {name}: {date}. {age} років. Список бажань: {wishlist}\n🤫",
+    "📢 Через тиждень — {date} — святкує {name}. Виповниться {age}. Віш-ліст: {wishlist}\n(тільки ніхто нічого не бачив 🤫)",
+    "🔔 За 7 днів {name}: {date}. {age} років. Список бажань: {wishlist}",
     "🗓️ {date} — у {name} ДН! Плануємо привітання! {age} років. Віш-ліст: {wishlist}"
 ]
 TEMPLATES_3D = [
@@ -59,8 +57,8 @@ TEMPLATES_3D = [
 ]
 TEMPLATES_0D = [
     "🎂 Сьогодні — {date}. Вітаємо {name}! Виповнюється {age}! 🎉 Віш-ліст: {wishlist}",
-    "🥳 Сьогодні святкує {name} ({date}) — {age}. Теплі слова та гіфки вітаються! {wishlist}",
-    "🎉 День Х! {name}, {age} — вітаємо! {wishlist}"
+    "🥳 Сьогодні святкує {name} ({date}) — {age}. Теплі слова та гіфки вітаються! Віш-ліст: {wishlist}",
+    "🎉 День Х! {name}, {age} — вітаємо! Віш-ліст: {wishlist}"
 ]
 
 def get_birthdays():
@@ -75,6 +73,12 @@ def calculate_age(bday: datetime.date, ref_date: datetime.date) -> int:
         age -= 1
     return age
 
+def parse_row(row):
+    name = row[0].strip() if len(row) > 0 else ""
+    date_str = row[1].strip() if len(row) > 1 else ""
+    wishlist = row[2].strip() if len(row) > 2 else "❌ не додано"
+    return name, date_str, wishlist
+
 # --- Щоденна перевірка ---
 async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
     today = datetime.date.today()
@@ -82,10 +86,10 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
     if not rows or len(rows) < 2:
         return
 
-    for row in rows[1:]:  # пропускаємо заголовок
-        if len(row) < 3:
+    for row in rows[1:]:
+        name, date_str, wishlist = parse_row(row)
+        if not name or not date_str:
             continue
-        name, date_str, wishlist = row[0].strip(), row[1].strip(), row[2].strip()
         try:
             bday = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
         except ValueError:
@@ -106,7 +110,7 @@ async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
             msg = random.choice(TEMPLATES_0D).format(name=name, date=date_txt, age=age, wishlist=wishlist)
             await context.bot.send_message(chat_id=CHAT_ID, text=msg)
 
-# --- Команда /birthdays (топ-3) ---
+# --- Команда /birthdays ---
 async def birthdays_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today = datetime.date.today()
     rows = get_birthdays()
@@ -114,9 +118,9 @@ async def birthdays_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if rows and len(rows) > 1:
         for row in rows[1:]:
-            if len(row) < 3:
+            name, date_str, wishlist = parse_row(row)
+            if not name or not date_str:
                 continue
-            name, date_str, wishlist = row[0].strip(), row[1].strip(), row[2].strip()
             try:
                 bday = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
             except ValueError:
@@ -136,46 +140,30 @@ async def birthdays_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = []
     for i, (_, name, d_next, age, wishlist) in enumerate(top, start=1):
-        lines.append(f"{i}) {format_date_uk(d_next)} — {name}, виповнюється {age}. 🔗 {wishlist}")
+        lines.append(f"{i}) {format_date_uk(d_next)} — {name}, виповнюється {age}. Віш-ліст: {wishlist}")
 
     msg = "🎉 Найближчі дні народження (топ-3):\n\n" + "\n".join(lines) + "\n\nТільки не забудь 😉"
     await update.message.reply_text(msg)
 
-
-# --- main / webhook ---
+# --- main ---
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("birthdays", birthdays_command))
 
-    # JobQueue (потрібен extras: [webhooks,job-queue])
     job_queue = app.job_queue
     if job_queue is None:
         print("ERROR: JobQueue недоступний. Додай у requirements.txt: python-telegram-bot[webhooks,job-queue]")
         raise SystemExit(1)
     job_queue.run_daily(check_and_notify, time=NOTIFY_TIME, name="daily-birthdays")
 
-    # Базовий URL для webhook:
-    # 1) PUBLIC_URL (рекомендовано створити самому, значення = повний https URL сервісу на Render)
-    # 2) RENDER_EXTERNAL_URL (іноді доступний)
-    # 3) RENDER_EXTERNAL_HOSTNAME (тоді будуємо https://<hostname>)
     base_url = (
         os.getenv("PUBLIC_URL")
         or os.getenv("RENDER_EXTERNAL_URL")
         or (f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}" if os.getenv("RENDER_EXTERNAL_HOSTNAME") else None)
     )
-    print("PUBLIC_URL:", os.getenv("PUBLIC_URL"))
-    print("RENDER_EXTERNAL_URL:", os.getenv("RENDER_EXTERNAL_URL"))
-    print("RENDER_EXTERNAL_HOSTNAME:", os.getenv("RENDER_EXTERNAL_HOSTNAME"))
-    print("Resolved base_url:", base_url)
-
     if not base_url:
-        print(
-            "ERROR: Не знайдено URL для webhook. "
-            "Додай PUBLIC_URL зі значенням типу https://<your-service>.onrender.com у Environment."
-        )
-        raise SystemExit(1)
+        raise SystemExit("ERROR: Не знайдено URL для webhook.")
 
-    # Запуск webhook-сервера PTB
     app.run_webhook(
         listen="0.0.0.0",
         port=int(os.getenv("PORT", 8080)),
